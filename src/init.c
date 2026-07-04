@@ -1,4 +1,5 @@
 #include "../include/init.h"
+#include <stdint.h>
 
 static inline mat_data_t rand_uniform(void)
 {
@@ -42,8 +43,7 @@ static mat_err_t standard_init_b(matrix_t *b)
 
 const init_api_t INIT_XAVIER = {.init_weight = xavier_init_w,
                                 .init_bias = zeros_init_b};
-
 const init_api_t INIT_KAIMING = {.init_weight = kaiming_init_w,
                                  .init_bias = zeros_init_b};
-
 const init_api_t INIT_ZEROS = {.init_weight = NULL, .init_bias = zeros_init_b};
+const init_api_t INIT_STANDER = {.init_weight = NULL, .init_bias = standard_init_b};

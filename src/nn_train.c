@@ -1,38 +1,72 @@
-#include "../include/nn_train.h"
-#include <stdint.h>
+#include "../include/nn.h"
 
-void nn_train(nn_trainer_t *trainer, nn_dataloader_t *train_loader,
-              const cost_api_t *cost_func, const nn_epoch_callback_t on_epoch_end)
+nn_err_t nn_trainer_step(nn_model_t *model, const nn_trainer_t *trainer)
 {
-    nn_model_t *model = trainer->model;
-    nn_model_cfg_t model_cfg = model->cfg;
-    nn_dataset_t *train_set = (nn_dataset_t *)train_loader->dataset;
-    const nn_train_cfg_t *train_cfg = &trainer->cfg;
-    uint64_t epoch = 1;
-    for (; epoch <= train_cfg->max_epochs; epoch++) {
-        nn_dataset_shuffle(train_set);
-        matrix_t batch_x, batch_y;
-        mat_data_t total_loss = 0.0f;
-        while (nn_dataloader_next(train_loader, &batch_x, &batch_y)) {
-            nn_forward_train(trainer, &batch_x);
-            nn_backprop(trainer, &batch_y, cost_func);
-            mat_data_t scaled_lr = train_cfg->learning_rate / train_cfg->batch_size;
-            for (uint64_t i = 0; i < model->cfg.arch_count - 1; i++) {
-                mat_scale_add(&model->ws[i], &model->ws[i], &trainer->dws[i],
-                              -scaled_lr);
-                mat_scale_add(&model->bs[i], &model->bs[i], &trainer->dbs[i],
-                              -scaled_lr);
-            }
-            matrix_t *pred = &trainer->as[model_cfg.arch_count - 1];
-            total_loss += cost_func->cost(pred, &batch_y);
-        }
+    NN_PTR_MODEL_VALID(model);
+    NN_PTR_NO_NULL(trainer, NN_ERR_NULL_PTR);
 
-        mat_data_t avg_train_loss = total_loss / train_loader->num_batches;
-        if (on_epoch_end) {
-            on_epoch_end(epoch, avg_train_loss);
-        } else {
-            printf("Epoch %03llu | Train Loss: " MAT_FMT "\n",
-                   (unsigned long long)epoch, avg_train_loss);
+    for (uint64_t i = 0; i < model->layer_count; i++) {
+        nn_layer_t *layer = model->layers[i];
+        mat_data_t lr = trainer->learning_rate;
+        if (strcmp(layer->name, "Dense") == 0) {
+            nn_dense_layer_t *dense = (nn_dense_layer_t *)layer;
+            MAT_CHECK(mat_scale_add(&dense->w, &dense->w, &dense->dw, -lr), op_err);
+            MAT_CHECK(mat_scale_add(&dense->b, &dense->b, &dense->db, -lr), op_err);
         }
     }
+    return NN_OK;
+
+op_err:
+    return NN_ERR_MAT_OP;
+}
+
+nn_err_t nn_train(nn_model_t *model, nn_trainer_t *trainer, nn_dataset_t *dataset,
+                  const cost_api_t *cost)
+{
+    NN_PTR_MODEL_VALID(model);
+    NN_PTR_NO_NULL(trainer, NN_ERR_NULL_PTR);
+    NN_PTR_NO_NULL(dataset, NN_ERR_NULL_PTR);
+    NN_PTR_NO_NULL(cost, NN_ERR_NULL_PTR);
+
+    NN_REQUIRE(dataset->X.rows == dataset->Y.rows, NN_ERR_MAT_SHAPE);
+
+    matrix_t x_batch;
+    matrix_t y_batch;
+
+    nn_dataloader_t loader;
+
+    for (uint64_t epoch = 0; epoch < trainer->max_epochs; epoch++) {
+        mat_data_t epoch_loss = 0.0f;
+        nn_dataset_shuffle(dataset);
+        nn_dataloader_init(&loader, dataset, trainer->batch_size);
+        while (nn_dataloader_next(&loader, &x_batch, &y_batch)) {
+            NN_CHECK(nn_forward_train(model, &x_batch), train_err);
+
+            if (cost->cost != NULL) {
+                matrix_t *y_pred = model->last_output;
+                epoch_loss += cost->cost(y_pred, &y_batch);
+            }
+            for (uint64_t i = 0; i < model->layer_count; i++) {
+                if (strcmp(model->layers[i]->name, "Dense") == 0) {
+                    nn_dense_layer_t *dense = (nn_dense_layer_t *)model->layers[i];
+                    memset(dense->dw.data, 0,
+                           sizeof(mat_data_t) * dense->dw.rows * dense->dw.cols);
+                    memset(dense->db.data, 0,
+                           sizeof(mat_data_t) * dense->db.rows * dense->db.cols);
+                }
+            }
+            NN_CHECK(nn_backprop(model, trainer, &y_batch, cost), train_err);
+            NN_CHECK(nn_trainer_step(model, trainer), train_err);
+        }
+
+        if (cost->cost != NULL && loader.num_batches > 0) {
+            printf("Epoch %lu/%lu - Loss: " MAT_FMT "\n", epoch + 1,
+                   trainer->max_epochs, epoch_loss / loader.num_batches);
+        }
+    }
+
+    return NN_OK;
+
+train_err:
+    return NN_ERR_TRAIN_FAILED;
 }

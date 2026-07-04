@@ -45,10 +45,8 @@ typedef enum {
             goto label;                                                             \
     } while (0)
 #else
-#define MAT_DEBUG(cond, err_code)                                                   \
-    do {                                                                            \
-        (void)(cond)                                                                \
-    } while (0)
+#define MAT_REQUIRE(cond, err_code) (void)(cond)
+#define MAT_CHECK(expr, label) (void)(expr)
 #endif
 
 #define MAT_VALID_INTERNAL(mat)                                                     \

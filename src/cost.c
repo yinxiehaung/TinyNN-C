@@ -1,9 +1,10 @@
+#include "../include/nn.h"
 #include "../include/cost.h"
 #include <math.h>
 
 static mat_data_t mse_cost(const matrix_t *a, const matrix_t *y)
 {
-    NN_REQUIRE(a->rows == y->rows && a->cols == y->cols, -1.0f);
+    NN_REQUIRE(a->rows == y->rows && a->cols == y->cols, MATRIX_ERR_DIM_MISMATCH);
 
     mat_data_t sum = 0;
     uint64_t n = a->rows * a->cols;
@@ -23,7 +24,7 @@ static mat_err_t mse_grad(matrix_t *dst, const matrix_t *a, const matrix_t *y)
     MAT_REQUIRE(a->rows == y->rows && a->cols == y->cols, MATRIX_ERR_DIM_MISMATCH);
 
     uint64_t n = a->rows * a->cols;
-    mat_data_t scale = 2.0f;
+    mat_data_t scale = 2.0f / n;
 
     for (uint64_t i = 0; i < n; i++) {
         dst->data[i] = (a->data[i] - y->data[i]) * scale;
@@ -101,6 +102,7 @@ mat_err_t cost_ce_grad(matrix_t *dst, const matrix_t *pred, const matrix_t *targ
 {
     for (uint64_t i = 0; i < pred->rows * pred->cols; i++) {
         dst->data[i] = pred->data[i] - target->data[i];
+        dst->data[i] /= (mat_data_t)pred->rows;
     }
     return MATRIX_OK;
 }

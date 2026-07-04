@@ -1,7 +1,8 @@
+#include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include "../../include/nn_train.h"
+#include "../../include/nn.h"
 // #define NDEBUG
 
 static uint32_t reverse_bytes(uint32_t val)
@@ -121,114 +122,132 @@ file_err:
     return MATRIX_ERR_INVALID_ARG;
 }
 
-int main(void)
+int infer(void)
 {
     srand(time(NULL));
-    arena_t arena;
-    arena_init(&arena, MiB(250));
-    matrix_t train_x, train_y;
-    mnist_load_images(&arena, "./train-images-idx3-ubyte/train-images.idx3-ubyte",
-                      &train_x);
-    mnist_load_labels(&arena, "./train-labels-idx1-ubyte/train-labels.idx1-ubyte",
-                      &train_y);
-    uint64_t total_samples = train_x.rows;
-    nn_dataset_t train_set = {.X = train_x, .Y = train_y};
-    nn_dataloader_t loader;
-    nn_dataloader_init(&loader, &train_set, 100);
-    uint64_t arch[] = {784, 128, 10};
-    act_api_t *acts[] = {(act_api_t *)&ACT_RELU, (act_api_t *)&ACT_SOFTMAX};
-    init_api_t *inits[] = {(init_api_t *)&INIT_KAIMING, (init_api_t *)&INIT_XAVIER};
-    nn_model_cfg_t model_cfg = {
-        .arch_count = 3, .arch = arch, .activations = acts, .initializers = inits};
-    nn_model_t model;
-    nn_model_init(&arena, &model_cfg, &model);
-    nn_train_cfg_t train_cfg = {
-        .learning_rate = 0.5f, .max_epochs = 20, .batch_size = loader.batch_size};
-    nn_trainer_t trainer;
-    nn_trainer_init(&arena, &train_cfg, &model, &trainer);
-    printf("Starting MNIST training...\n");
-    nn_train(&trainer, &loader, &COST_CROSS_ENTROPY, NULL);
-    printf("\nSaving trained model weights...\n");
-    if (nn_model_save(&model, "mnist_model.bin") == NN_OK) {
-        printf("Model successfully persisted to disk!\n");
+    arena_t arena = {0};
+    if (arena_init(&arena, MiB(100)) != ARENA_OK) {
+        printf("Error: Arena init failed\n");
+        return 1;
     }
+
+    nn_model_t model = {0};
+    nn_model_init(&model, &arena, 20);
+    if (nn_model_load(&model, "./mnist_model.bin") != NN_OK) {
+        printf("Error: Model load failed\n");
+        arena_free(&arena);
+        return 1;
+    }
+    nn_model_compile(&model, 1);
+    nn_dataset_t test_dataset;
+    mnist_load_images(&arena, "test-images-idx3-ubyte/t10k-images.idx3-ubyte",
+                      &test_dataset.X);
+    mnist_load_labels(&arena, "test-labels-idx1-ubyte/t10k-labels.idx1-ubyte",
+                      &test_dataset.Y);
+    matrix_t single_img;
+    int r_idx = rand() % test_dataset.X.rows;
+    single_img.rows = 1;
+    single_img.cols = 784;
+    single_img.data = test_dataset.X.data + (r_idx * 784);
+
+    matrix_t out;
+    if (mat_init(&arena, 1, 10, &out) != MATRIX_OK) {
+        printf("Error: Output matrix init failed\n");
+        arena_free(&arena);
+        return 1;
+    }
+
+    if (nn_forward_predict(&model, &single_img, &out) != NN_OK) {
+        printf("Error: Prediction failed\n");
+        arena_free(&arena);
+        return 1;
+    }
+
+    int best_digit = 0;
+    mat_data_t max_prob = out.data[0];
+    mat_data_t sum_prob = out.data[0];
+    for (int i = 1; i < 10; i++) {
+
+        printf("Lable %d prob:" MAT_FMT "\n", i, out.data[i]);
+        if (out.data[i] > max_prob) {
+
+            max_prob = out.data[i];
+
+            best_digit = i;
+        }
+        sum_prob += out.data[i];
+    }
+    printf("sum_prob:" MAT_FMT "\n", sum_prob);
+    int actual_digit = 0;
+    mat_data_t *y_row = test_dataset.Y.data + (r_idx * 10);
+    for (int i = 0; i < 10; i++) {
+        if (y_row[i] == 1.0f) {
+            actual_digit = i;
+            break;
+        }
+    }
+
+    printf("Predicted: %d\n", best_digit);
+    printf("Actual: %d\n", actual_digit);
+    printf("Confidence: %.2f%%\n", max_prob * 100.0f);
+
     arena_free(&arena);
     return 0;
 }
-
-/*int main(void)
+int train(void)
 {
-    srand(time(NULL));
-
-    arena_t model_arena;
-    arena_init(&model_arena, MiB(250));
-
-    arena_t scratch_arena;
-    arena_init(&scratch_arena, MiB(250));
-
-    uint64_t arch[] = {784, 128, 10};
-    act_api_t *acts[] = {(act_api_t *)&ACT_RELU, (act_api_t *)&ACT_SOFTMAX};
-
-    nn_model_cfg_t model_cfg = {
-        .arch_count = 3, .arch = arch, .activations = acts, .initializers = NULL};
-
-    nn_model_t model;
-    nn_model_init(&model_arena, &model_cfg, &model);
-
-    printf("Load Model...\n");
-    if (nn_model_load(&model, "mnist_model.bin") != NN_OK) {
-        printf("Error: mnist_model.bin Can't load.\n");
-        arena_free(&model_arena);
-        arena_free(&scratch_arena);
-        return -1;
+    srand(67);
+    arena_t arena = {0};
+    if (arena_init(&arena, MiB(500)) != ARENA_OK) {
+        printf("Error: Arena init failed\n");
+        return 1;
     }
 
-    matrix_t test_x, test_y;
-    mnist_load_images(&model_arena,
-                      "./train-images-idx3-ubyte/train-images.idx3-ubyte", &test_x);
-    mnist_load_labels(&model_arena,
-                      "./train-labels-idx1-ubyte/train-labels.idx1-ubyte", &test_y);
+    nn_dataset_t train_dataset;
+    mnist_load_images(&arena, "train-images-idx3-ubyte/train-images.idx3-ubyte",
+                      &train_dataset.X);
+    mnist_load_labels(&arena, "train-labels-idx1-ubyte/train-labels.idx1-ubyte",
+                      &train_dataset.Y);
 
-    matrix_t prediction;
-    if (mat_init(&model_arena, 1, 10, &prediction) != MATRIX_OK) {
-        return -1;
+    nn_model_t model = {0};
+    layer_desc_t arch[] = {{784, 128, &ACT_RELU}, {128, 10, &ACT_SOFTMAX}};
+    init_api_t apis[] = {INIT_KAIMING, INIT_XAVIER};
+    nn_model_init(&model, &arena, 20);
+    if (nn_model_add_dense(&model, arch[0].in, arch[0].out) != NN_OK ||
+        nn_model_add_activation(&model, &ACT_RELU) != NN_OK ||
+        nn_model_add_dense(&model, arch[1].in, arch[1].out) != NN_OK ||
+        nn_model_add_activation(&model, &ACT_SOFTMAX) != NN_OK) {
+        printf("Error: Model build failed\n");
+        arena_free(&arena);
+        return 1;
+    }
+    nn_trainer_t trainer = {.weight_decay = 0.0f,
+                            .learning_rate = 0.1f,
+                            .batch_size = 128,
+                            .max_epochs = 30};
+    nn_model_compile(&model, trainer.batch_size);
+    nn_model_init_params(&model, apis);
+    nn_model_print(&model);
+    printf("Starting training...\n");
+    if (nn_train(&model, &trainer, &train_dataset, &COST_CROSS_ENTROPY) != NN_OK) {
+        printf("Error: Training failed\n");
+        arena_free(&arena);
+        return 1;
     }
 
-    for (int i = 0; i < 5; i++) {
-        uint64_t rand_idx = rand() % test_x.rows;
-
-        matrix_t single_image = {
-            .data = test_x.data + (rand_idx * 784), .rows = 1, .cols = 784};
-
-        if (nn_forward_predict(&scratch_arena, &model, &single_image, &prediction) !=
-            NN_OK) {
-            printf("Error:Backprop\n");
-            break;
-        }
-
-        int pred_label = 0;
-        mat_data_t max_prob = MAT_PTR_AT(&prediction, 0, 0);
-        for (int j = 1; j < 10; j++) {
-            mat_data_t prob = MAT_PTR_AT(&prediction, 0, j);
-            if (prob > max_prob) {
-                max_prob = prob;
-                pred_label = j;
-            }
-        }
-        int true_label = 0;
-        for (int j = 0; j < 10; j++) {
-            if (MAT_PTR_AT(&test_y, rand_idx, j) == 1.0f) {
-                true_label = j;
-                break;
-            }
-        }
-        printf("Test Sample #%05llu | AI Infer: [%d] (Confindence: %5.1f%%) | True
-Label: "
-               "[%d] %s\n",
-               (unsigned long long)rand_idx, pred_label, max_prob * 100.0f,
-               true_label, (pred_label == true_label) ? "PASS ✅" : "FAIL ❌");
+    if (nn_model_save(&model, "./mnist_model.bin") != NN_OK) {
+        printf("Error: Model save failed\n");
+        arena_free(&arena);
+        return 1;
     }
-    arena_free(&model_arena);
-    arena_free(&scratch_arena);
+
+    printf("Model saved to ./mnist_model.bin");
+
+    arena_free(&arena);
     return 0;
-}*/
+}
+int main(void)
+{
+    train();
+    infer();
+}
