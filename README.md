@@ -110,7 +110,7 @@ int main() {
 To compile the core library and run the examples, ensure you have a standard C compiler (gcc) and make installed.
 
 ```bash
-git clone [https://github.com/YourUsername/TinyNN-C.git](https://github.com/YourUsername/TinyNN-C.git)
+git clone [https://github.com/yinxiehuang/TinyNN-C.git](https://github.com/yinxiehuang/TinyNN-C.git)
 cd TinyNN-C
 
 # Compile the core MNIST training example
