@@ -3,5 +3,8 @@ bin/*
 docs/*
 chapters/*
 project/obj/*
+project/splitnn_mnist/server
+project/splitnn_mnist/client
+project/mnist/mnist
 .gdb_history
 tests/*
